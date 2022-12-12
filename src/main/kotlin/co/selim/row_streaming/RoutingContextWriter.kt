@@ -8,25 +8,13 @@ class RoutingContextWriter(
   private val ctx: RoutingContext
 ) : Writer() {
 
-  private var buffer: Buffer? = null
-
   override fun close() {
-    if (buffer != null) {
-      ctx.response().end(buffer)
-      buffer = null
-    } else {
-      ctx.response().end()
-    }
+    ctx.response().end()
   }
 
-  override fun flush() {
-    buffer?.let {
-      ctx.response().write(it)
-      buffer = null
-    }
-  }
+  override fun flush() = Unit
 
   override fun write(cbuf: CharArray, off: Int, len: Int) {
-    buffer = Buffer.buffer(cbuf.concatToString(off, off + len))
+    ctx.response().write(Buffer.buffer(cbuf.concatToString(off, off + len)))
   }
 }
