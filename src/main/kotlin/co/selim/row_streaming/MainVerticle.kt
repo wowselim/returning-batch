@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.core.JsonGenerator
 import io.github.serpro69.kfaker.faker
 import io.vertx.core.Future
+import io.vertx.core.Vertx
 import io.vertx.core.json.jackson.DatabindCodec
 import io.vertx.ext.web.Route
 import io.vertx.ext.web.Router
@@ -11,12 +12,14 @@ import io.vertx.ext.web.RoutingContext
 import io.vertx.kotlin.coroutines.CoroutineVerticle
 import io.vertx.kotlin.coroutines.await
 import io.vertx.kotlin.coroutines.awaitBlocking
+import io.vertx.kotlin.coroutines.toReceiveChannel
 import io.vertx.pgclient.PgConnectOptions
 import io.vertx.pgclient.PgPool
 import io.vertx.sqlclient.PoolOptions
 import io.vertx.sqlclient.SqlConnection
 import io.vertx.sqlclient.Transaction
 import io.vertx.sqlclient.Tuple
+import kotlinx.coroutines.channels.consume
 import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -38,7 +41,7 @@ class MainVerticle : CoroutineVerticle() {
 
     val router = Router.router(vertx)
 
-    router.get("/dump")
+    router.get()
       .coroutineHandler { ctx -> dumpTable(pgPool, ctx) }
 
     val server = vertx
@@ -52,7 +55,7 @@ class MainVerticle : CoroutineVerticle() {
 
   private fun createPgPool(): PgPool {
     return with(pgContainer) {
-      val connectOptions = PgConnectOptions.fromUri(jdbcUrl.substring("jdbc:".length))
+      val connectOptions = PgConnectOptions.fromUri(jdbcUrl.removePrefix("jdbc:"))
         .setUser(username)
         .setPassword(password)
       val poolOptions = PoolOptions().setMaxSize(4)
@@ -77,10 +80,11 @@ class MainVerticle : CoroutineVerticle() {
   }
 
   private suspend fun dumpTable(pgPool: PgPool, ctx: RoutingContext) {
-    pgPool.withSuspendingTransaction {
-      val cursor = prepare("select * from person")
+    pgPool.withSuspendingTransaction { tx ->
+      val rowChannel = prepare("select * from person")
         .await()
-        .cursor()
+        .createStream(50)
+        .toReceiveChannel(vertx)
 
       ctx.response().isChunked = true
       ctx.attachment("person_dump.json")
@@ -91,14 +95,13 @@ class MainVerticle : CoroutineVerticle() {
         .use { generator ->
           generator.writeStartArray()
 
-          cursor.read(50).await().forEach { row ->
-            awaitBlocking { generator.writePOJO(row.toJson()) }
-          }
-          while (cursor.hasMore()) {
-            cursor.read(50).await().forEach { row ->
-              awaitBlocking { generator.writePOJO(row.toJson()) }
+          rowChannel.consume {
+            for (row in this) {
+              generator.writePOJO(row.toJson())
             }
           }
+          tx.commit().await()
+
           generator.writeEndArray()
         }
     }
@@ -129,7 +132,6 @@ class MainVerticle : CoroutineVerticle() {
           val transaction = connection.begin().await()
           try {
             promise.complete(block(connection, transaction))
-            transaction.commit().await()
           } catch (t: Throwable) {
             promise.fail(t)
             transaction.rollback().await()
@@ -138,4 +140,8 @@ class MainVerticle : CoroutineVerticle() {
       }
     }.await()
   }
+}
+
+suspend fun main() {
+  Vertx.vertx().deployVerticle(MainVerticle()).await()
 }
