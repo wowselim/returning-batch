@@ -24,7 +24,8 @@ class BatchInsertReturningIdsTest {
   private lateinit var pgPool: Pool
 
   @BeforeEach
-  fun setup(vertx: Vertx) = runBlocking(vertx.dispatcher()) {
+  fun setup(vertx: Vertx): Unit = runBlocking(vertx.dispatcher()) {
+
     awaitBlocking { pgContainer.start() }
     pgPool = with(pgContainer) {
       val connectOptions = PgConnectOptions.fromUri(jdbcUrl.removePrefix("jdbc:"))
@@ -33,6 +34,10 @@ class BatchInsertReturningIdsTest {
       val poolOptions = PoolOptions().setMaxSize(4)
       Pool.pool(vertx, connectOptions, poolOptions)
     }
+
+    pgPool.query("create table person(id bigserial primary key, name text)")
+      .execute()
+      .coAwait()
   }
 
   @AfterEach
@@ -43,9 +48,6 @@ class BatchInsertReturningIdsTest {
 
   @Test
   fun testBatchInsertReturningIds(vertx: Vertx) = runBlocking(vertx.dispatcher()) {
-    pgPool.query("create table person(id bigserial primary key, name text)")
-      .execute()
-      .coAwait()
 
     val batch = listOf(
       Tuple.of("John"),
@@ -56,6 +58,31 @@ class BatchInsertReturningIdsTest {
       .executeBatch(batch)
       .coAwait()
 
+    val ids = buildList<Long>(batch.size) {
+      do {
+        val key = rows.iterator().next().getLong("id");
+        add(key)
+        rows = rows.next()
+      } while (rows != null)
+    }
+
+    assertEquals(3, ids.size)
+    assertIterableEquals(listOf<Long>(1, 2, 3), ids)
+  }
+
+  @Test
+  fun testBatchInsertReturningIdsInTransaction(vertx: Vertx) = runBlocking(vertx.dispatcher()) {
+
+    val batch = listOf(
+      Tuple.of("John"),
+      Tuple.of("Jane"),
+      Tuple.of("Selim"),
+    )
+
+    var rows = pgPool.withTransaction {
+      pgPool.preparedQuery("insert into person(name) values($1) returning id")
+        .executeBatch(batch)
+    }.coAwait()
     val ids = buildList<Long>(batch.size) {
       do {
         val key = rows.iterator().next().getLong("id");
