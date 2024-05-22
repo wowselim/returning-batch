@@ -1,1 +1,1 @@
-rootProject.name = "row-streaming"
+rootProject.name = "returning-batch"
