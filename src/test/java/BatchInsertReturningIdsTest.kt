@@ -79,8 +79,8 @@ class BatchInsertReturningIdsTest {
       Tuple.of("Selim"),
     )
 
-    var rows = pgPool.withTransaction {
-      pgPool.preparedQuery("insert into person(name) values($1) returning id")
+    var rows = pgPool.withTransaction { con ->
+      con.preparedQuery("insert into person(name) values($1) returning id")
         .executeBatch(batch)
     }.coAwait()
     val ids = buildList<Long>(batch.size) {
